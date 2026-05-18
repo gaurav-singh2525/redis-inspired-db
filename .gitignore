@@ -1,0 +1,5 @@
+build/
+*.o
+*.out
+a.out
+db_server
