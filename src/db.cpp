@@ -1,7 +1,7 @@
 #include "db.h"
 #include "parser.h"
 #include "global.h"
-#include "persistence.h"
+#include "wal.h"
 #include "logger.h"
 
 #include <cctype>
@@ -34,14 +34,6 @@ string cmdDispatcher(const string &input, int clientID)
 
         return "PONG";
     }
-    else if (cmd == "LOAD")
-    {
-        if (parsedData.size() != 1)
-            return "INVALID COMMAND";
-
-        loadDatabase();
-        return "DATABASE RELOADED";
-    }
     else if (cmd == "SET")
     {
 
@@ -50,12 +42,13 @@ string cmdDispatcher(const string &input, int clientID)
 
         {
             lock_guard<mutex> lock(dbMutex);
+
+            appendToWal(input);
+
             database[parsedData[1]] = parsedData[2];
         }
 
         logMessage("Client:" + to_string(clientID) + " set key: " + parsedData[1] + " as " + parsedData[2]);
-
-        saveDatabase();
 
         return "OK";
     }
@@ -92,12 +85,12 @@ string cmdDispatcher(const string &input, int clientID)
             if (database.find(parsedData[1]) == database.end())
                 return "DNE";
 
+            appendToWal(input);
+
             database.erase(parsedData[1]);
         }
 
         logMessage("Client:" + to_string(clientID) + " deleted " + parsedData[1]);
-
-        saveDatabase();
 
         return "OK";
     }
@@ -114,11 +107,10 @@ string cmdDispatcher(const string &input, int clientID)
     {
         {
             lock_guard<mutex> lock(dbMutex);
-
+            appendToWal(input);
+            clearWal();
             database.clear();
         }
-
-        saveDatabase();
 
         return "OK";
     }

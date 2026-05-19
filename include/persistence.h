@@ -2,3 +2,4 @@
 
 void saveDatabase();
 void loadDatabase();
+void replayWal();

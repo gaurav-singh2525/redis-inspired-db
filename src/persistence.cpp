@@ -1,9 +1,12 @@
 #include "persistence.h"
 #include "global.h"
+#include "parser.h"
+
 #include <fstream>
 #include <iostream>
 #include <mutex>
-#include <unordered_map>
+#include <cctype>
+#include <algorithm>
 
 using namespace std;
 
@@ -11,12 +14,11 @@ void saveDatabase()
 {
     lock_guard<mutex> lock(dbMutex);
 
-    ofstream fout;
-    fout.open("store.cdb");
+    ofstream fout("data/store.cdb");
 
     if (!fout.is_open())
     {
-        cerr << "Failed to open store.cdb\n";
+        cerr << "Failed to open file\n";
         return;
     }
 
@@ -24,23 +26,20 @@ void saveDatabase()
     {
         fout << key << "=" << value << "\n";
     }
-    fout.close();
+    cout << "saved success\n";
 }
 
 void loadDatabase()
 {
     lock_guard<mutex> lock(dbMutex);
 
-    ifstream fin;
-    fin.open("store.cdb");
+    ifstream fin("data/store.cdb");
 
     if (!fin.is_open())
     {
         return;
     }
 
-    database.clear();
-    
     string line;
 
     while (getline(fin, line))
@@ -68,5 +67,55 @@ void loadDatabase()
 
         database[key] = value;
     }
-    fin.close();
+    cout << "Success loading\n";
+}
+
+void replayWal()
+{
+    lock_guard<mutex> lock(dbMutex);
+
+    ifstream file(
+        "data/wal.log");
+
+    string line;
+
+    while (getline(file, line))
+    {
+        vector<string> parsedData =
+            parseCmd(line);
+
+        if (parsedData.empty())
+            continue;
+
+        string cmd =
+            parsedData[0];
+
+        transform(cmd.begin(), cmd.end(), cmd.begin(),
+                  [](unsigned char c) -> char
+                  {
+                      return static_cast<char>(std::toupper(c));
+                  });
+
+        if (cmd == "SET")
+        {
+            if (parsedData.size() != 3)
+                continue;
+
+            database[parsedData[1]] =
+                parsedData[2];
+        }
+        else if (cmd == "DEL")
+        {
+            if (parsedData.size() != 2)
+                continue;
+
+            database.erase(
+                parsedData[1]);
+        }
+        else if (cmd == "CLEAR")
+        {
+            database.clear();
+        }
+    }
+    cout << "success replay\n";
 }

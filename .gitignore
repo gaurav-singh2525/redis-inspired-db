@@ -3,4 +3,5 @@ build/
 *.out
 a.out
 db_server
-store.cdb
+data/*.cdb
+data/*.log
