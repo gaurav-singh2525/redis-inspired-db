@@ -1,15 +1,14 @@
 #include "db.h"
 #include "parser.h"
-#include <unordered_map>
+#include "global.h"
+#include "persistence.h"
+#include "logger.h"
+
 #include <cctype>
 #include <algorithm>
-#include <mutex>
 #include <iostream>
 
-mutex dbMutex;
-mutex coutMutex;
-
-unordered_map<string, string> database;
+using namespace std;
 
 string cmdDispatcher(const string &input, int clientID)
 {
@@ -35,6 +34,14 @@ string cmdDispatcher(const string &input, int clientID)
 
         return "PONG";
     }
+    else if (cmd == "LOAD")
+    {
+        if (parsedData.size() != 1)
+            return "INVALID COMMAND";
+
+        loadDatabase();
+        return "DATABASE RELOADED";
+    }
     else if (cmd == "SET")
     {
 
@@ -46,12 +53,9 @@ string cmdDispatcher(const string &input, int clientID)
             database[parsedData[1]] = parsedData[2];
         }
 
-        {
-            lock_guard<mutex> lock(coutMutex);
-            cout << "Client:" << clientID
-                 << " set " << parsedData[1]
-                 << " = " << parsedData[2] << endl;
-        }
+        logMessage("Client:" + to_string(clientID) + " set key: " + parsedData[1] + " as " + parsedData[2]);
+
+        saveDatabase();
 
         return "OK";
     }
@@ -91,11 +95,9 @@ string cmdDispatcher(const string &input, int clientID)
             database.erase(parsedData[1]);
         }
 
-        {
-            lock_guard<mutex> lock(coutMutex);
-            cout << "Client:" << clientID
-                 << " deleted " << parsedData[1] << endl;
-        }
+        logMessage("Client:" + to_string(clientID) + " deleted " + parsedData[1]);
+
+        saveDatabase();
 
         return "OK";
     }
@@ -105,10 +107,8 @@ string cmdDispatcher(const string &input, int clientID)
         if (parsedData.size() != 1)
             return "INVALID COMMAND";
 
-        {
-            lock_guard<mutex> lock(dbMutex);
-            return to_string(database.size());
-        }
+        lock_guard<mutex> lock(dbMutex);
+        return to_string(database.size());
     }
     else if (cmd == "CLEAR")
     {
@@ -117,6 +117,9 @@ string cmdDispatcher(const string &input, int clientID)
 
             database.clear();
         }
+
+        saveDatabase();
+
         return "OK";
     }
 

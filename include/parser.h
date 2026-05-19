@@ -2,5 +2,4 @@
 #include <vector>
 #include <string>
 
-using namespace std;
-vector<string> parseCmd(const string &input);
+std::vector<std::string> parseCmd(const std::string &input);

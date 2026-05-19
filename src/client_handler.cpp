@@ -1,6 +1,7 @@
 #include "db.h"
 #include "client_handler.h"
-#include <string.h>
+#include "logger.h"
+
 #include <iostream>
 #include <arpa/inet.h>
 #include <sys/socket.h>
@@ -13,30 +14,51 @@ using namespace std;
 void handleClient(int client_fd, int clientID)
 {
 
-    cout << "ClientID:" << clientID << " has thread id:" << this_thread::get_id() << endl;
+    string pending;
 
     while (true)
     {
         char buffer[1024];
 
-        int bytes = recv(client_fd, buffer, sizeof(buffer) - 1, 0);
+        int bytes =
+            recv(client_fd,
+                 buffer,
+                 sizeof(buffer) - 1,
+                 0);
 
         if (bytes <= 0)
         {
-            cout << "Client:" << clientID << " Disconnected.\n";
+            logMessage(
+                "Client:" + to_string(clientID) + " disconnected");
 
             break;
         }
 
         buffer[bytes] = '\0';
 
-        string rtnBuffer = cmdDispatcher(buffer, clientID);
-        rtnBuffer += "\n";
+        pending += buffer;
 
-        send(client_fd,
-             rtnBuffer.c_str(),
-             rtnBuffer.size(),
-             0);
+        size_t pos;
+
+        while ((pos = pending.find('\n')) != string::npos)
+        {
+            string command =
+                pending.substr(0, pos);
+
+            pending.erase(0, pos + 1);
+
+            string response =
+                cmdDispatcher(
+                    command,
+                    clientID);
+
+            response += "\n";
+
+            send(client_fd,
+                 response.c_str(),
+                 response.size(),
+                 0);
+        }
     }
 
     close(client_fd);

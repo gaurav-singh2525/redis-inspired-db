@@ -1,5 +1,7 @@
 #include "server.h"
 #include "client_handler.h"
+#include "logger.h"
+
 #include <iostream>
 #include <thread>
 #include <atomic>
@@ -52,7 +54,7 @@ void startServer()
         return;
     }
 
-    cout << "Server listening on port 9000...\n";
+    logMessage("Server listening on port 9000...");
 
     while (true)
     {
@@ -63,7 +65,7 @@ void startServer()
             perror("accept");
             continue;
         }
-        cout << "new client connected" << endl;
+        logMessage("New Client Connected");
 
         int clientID = ++clientCount;
 

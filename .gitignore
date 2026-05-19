@@ -3,3 +3,4 @@ build/
 *.out
 a.out
 db_server
+store.cdb

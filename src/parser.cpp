@@ -16,11 +16,13 @@ vector<string> parseCmd(const string &input)
         return parsedData;
     parsedData.push_back(token);
 
+    token.clear();
+
     getline(ss, token);
 
     if (!token.empty() && token[0] == ' ')
         token.erase(0, 1);
-        
+
     if (!token.empty())
         parsedData.push_back(token);
 

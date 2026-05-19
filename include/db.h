@@ -1,5 +1,4 @@
 #pragma once
 #include<string>
-using namespace std;
 
-string cmdDispatcher(const string &input, int clientID);
+std::string cmdDispatcher(const std::string &input, int clientID);
