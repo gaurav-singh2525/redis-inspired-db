@@ -98,23 +98,41 @@ void replayWal()
 
         if (cmd == "SET")
         {
-            if (parsedData.size() != 3)
-                continue;
-
             database[parsedData[1]] =
                 parsedData[2];
         }
         else if (cmd == "DEL")
         {
-            if (parsedData.size() != 2)
-                continue;
-
             database.erase(
                 parsedData[1]);
         }
         else if (cmd == "CLEAR")
         {
             database.clear();
+        }
+        else if (cmd == "EXPIRE")
+        {
+            auto timestamp =
+                stoll(parsedData[2]);
+
+            auto expiryTime =
+                chrono::system_clock::time_point(
+                    chrono::seconds(
+                        timestamp));
+
+            if (
+                chrono::system_clock::now() > expiryTime)
+            {
+                database.erase(
+                    parsedData[1]);
+
+                expiryMap.erase(
+                    parsedData[1]);
+
+                continue;
+            }
+
+            expiryMap[parsedData[1]] = expiryTime;
         }
     }
     cout << "success replay\n";

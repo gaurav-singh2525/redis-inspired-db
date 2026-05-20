@@ -1,7 +1,9 @@
 #include "persistence.h"
 #include "wal.h"
 #include "server.h"
+#include "ttl_cleanup.h"
 
+#include <thread>
 
 int main()
 {
@@ -9,6 +11,10 @@ int main()
     replayWal();
     saveDatabase();
     clearWal();
+    std::thread ttlThread(
+        cleanupExpiredKeys);
+
+    ttlThread.detach();
     startServer();
     return 0;
 }
