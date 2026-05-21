@@ -1,5 +1,4 @@
 #include "global.h"
-#include <unordered_map>
 #include <mutex>
 
 using namespace std;

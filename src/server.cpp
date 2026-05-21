@@ -2,10 +2,8 @@
 #include "client_handler.h"
 #include "logger.h"
 
-#include <iostream>
 #include <thread>
 #include <atomic>
-
 #include <arpa/inet.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
