@@ -2,7 +2,9 @@
 #include "parser.h"
 #include "global.h"
 #include "wal.h"
+#include "persistence.h"
 #include "logger.h"
+#include "lru.h"
 
 #include <cctype>
 #include <algorithm>
@@ -49,6 +51,7 @@ string cmdDispatcher(const string &input, int clientID)
                 expiryMap.erase(parsedData[1]);
 
             database[parsedData[1]] = parsedData[2];
+            insertKey(parsedData[1]);
         }
 
         logMessage("Client:" + to_string(clientID) + " set key: " + parsedData[1] + " as " + parsedData[2]);
@@ -64,9 +67,7 @@ string cmdDispatcher(const string &input, int clientID)
             lock_guard<mutex>
                 lock(dbMutex);
 
-            if (
-                database.find(
-                    parsedData[1]) == database.end())
+            if (database.find(parsedData[1]) == database.end())
             {
                 return "KEY DNE";
             }
@@ -153,6 +154,7 @@ string cmdDispatcher(const string &input, int clientID)
             if (it == database.end())
                 return "NULL";
 
+            touchKey(parsedData[1]);
             value = it->second;
         }
 
@@ -172,6 +174,7 @@ string cmdDispatcher(const string &input, int clientID)
 
             appendToWal(input);
 
+            removeKey(parsedData[1]);
             database.erase(parsedData[1]);
             expiryMap.erase(parsedData[1]);
         }
@@ -196,6 +199,7 @@ string cmdDispatcher(const string &input, int clientID)
                 {
                     database.erase(
                         it->first);
+                    removeKey(it->first);
 
                     it =
                         expiryMap.erase(it);
@@ -208,14 +212,34 @@ string cmdDispatcher(const string &input, int clientID)
             return to_string(database.size());
         }
     }
+    else if (cmd == "LRU")
+    {
+        if (parsedData.size() != 1)
+            return "INVALID COMMAND";
+
+        lock_guard<mutex> lock(dbMutex);
+        return formatLruList();
+    }
+    else if (cmd == "CAPACITY")
+    {
+        if (parsedData.size() != 1)
+            return "INVALID COMMAND";
+
+        return to_string(MAX_CAPACITY);
+    }
     else if (cmd == "CLEAR")
     {
+        if (parsedData.size() != 1)
+            return "INVALID COMMAND";
+
         {
             lock_guard<mutex> lock(dbMutex);
-            appendToWal(input);
-            clearWal();
             database.clear();
             expiryMap.clear();
+            lruList.clear();
+            lruMap.clear();
+            clearWal();
+            clearSnapshot();
         }
         return "OK";
     }
@@ -235,7 +259,7 @@ bool isExpired(
     if (chrono::system_clock::now() > it->second)
     {
         database.erase(key);
-
+        removeKey(key);
         expiryMap.erase(key);
 
         return true;

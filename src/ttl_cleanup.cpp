@@ -1,4 +1,5 @@
 #include "global.h"
+#include "lru.h"
 
 #include <thread>
 #include <chrono>
@@ -10,21 +11,17 @@ void cleanupExpiredKeys()
     while (true)
     {
         {
-            lock_guard<mutex>
-                lock(dbMutex);
+            lock_guard<mutex> lock(dbMutex);
 
-            for (auto it =
-                     expiryMap.begin();
-                 it != expiryMap.end();)
+            for (auto it = expiryMap.begin(); it != expiryMap.end();)
             {
                 if (
                     chrono::system_clock::now() > it->second)
                 {
-                    database.erase(
-                        it->first);
+                    database.erase(it->first);
+                    removeKey(it->first);
 
-                    it =
-                        expiryMap.erase(it);
+                    it =expiryMap.erase(it);
                 }
                 else
                 {

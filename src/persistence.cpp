@@ -1,6 +1,7 @@
 #include "persistence.h"
 #include "global.h"
 #include "parser.h"
+#include "lru.h"
 
 #include <fstream>
 #include <iostream>
@@ -27,6 +28,11 @@ void saveDatabase()
         fout << key << "=" << value << "\n";
     }
     cout << "saved success\n";
+}
+
+void clearSnapshot()
+{
+    ofstream file("data/store.cdb", ios::trunc);
 }
 
 void loadDatabase()
@@ -66,6 +72,7 @@ void loadDatabase()
         string value = line.substr(pos + 1);
 
         database[key] = value;
+        insertKey(key);
     }
     cout << "Success loading\n";
 }
@@ -100,15 +107,13 @@ void replayWal()
         {
             database[parsedData[1]] =
                 parsedData[2];
+            insertKey(parsedData[1]);
         }
         else if (cmd == "DEL")
         {
             database.erase(
                 parsedData[1]);
-        }
-        else if (cmd == "CLEAR")
-        {
-            database.clear();
+            removeKey(parsedData[1]);
         }
         else if (cmd == "EXPIRE")
         {
@@ -125,10 +130,7 @@ void replayWal()
             {
                 database.erase(
                     parsedData[1]);
-
-                expiryMap.erase(
-                    parsedData[1]);
-
+                removeKey(parsedData[1]);
                 continue;
             }
 

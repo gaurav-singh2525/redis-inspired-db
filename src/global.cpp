@@ -13,3 +13,12 @@ unordered_map<
     string,
     chrono::system_clock::time_point>
     expiryMap;
+
+std::list<std::string> lruList;
+
+std::unordered_map<
+    std::string,
+    std::list<std::string>::iterator>
+    lruMap;
+
+const size_t MAX_CAPACITY = 10;
