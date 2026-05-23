@@ -2,6 +2,7 @@
 #include "parser.h"
 #include "global.h"
 #include "wal.h"
+#include "resp.h"
 #include "persistence.h"
 #include "logger.h"
 #include "lru.h"
@@ -9,12 +10,23 @@
 #include <cctype>
 #include <algorithm>
 
-
 using namespace std;
 
 string cmdDispatcher(const string &input, int clientID)
 {
-    const auto parsedData = parseCmd(input);
+    vector<string> parsedData;
+
+    if (!input.empty() &&
+        input[0] == '*')
+    {
+        parsedData =
+            parseRESP(input);
+    }
+    else
+    {
+        parsedData =
+            parseCmd(input);
+    }
 
     if (parsedData.empty() || parsedData[0].empty())
     {
@@ -45,7 +57,13 @@ string cmdDispatcher(const string &input, int clientID)
         {
             lock_guard<mutex> lock(dbMutex);
 
-            appendToWal(input);
+            string walCmd =
+                "SET " +
+                parsedData[1] +
+                " " +
+                parsedData[2];
+
+            appendToWal(walCmd);
 
             if (expiryMap.find(parsedData[1]) != expiryMap.end())
                 expiryMap.erase(parsedData[1]);
@@ -172,7 +190,9 @@ string cmdDispatcher(const string &input, int clientID)
             if (database.find(parsedData[1]) == database.end())
                 return "DNE";
 
-            appendToWal(input);
+            appendToWal(
+                "DEL " +
+                parsedData[1]);
 
             removeKey(parsedData[1]);
             database.erase(parsedData[1]);
