@@ -2,7 +2,6 @@
 #include "parser.h"
 #include "global.h"
 #include "wal.h"
-#include "resp.h"
 #include "persistence.h"
 #include "logger.h"
 #include "lru.h"
@@ -14,19 +13,9 @@ using namespace std;
 
 string cmdDispatcher(const string &input, int clientID)
 {
-    vector<string> parsedData;
 
-    if (!input.empty() &&
-        input[0] == '*')
-    {
-        parsedData =
-            parseRESP(input);
-    }
-    else
-    {
-        parsedData =
-            parseCmd(input);
-    }
+    vector<string> parsedData =
+        parseCmd(input);
 
     if (parsedData.empty() || parsedData[0].empty())
     {

@@ -5,6 +5,8 @@
 #include <string>
 #include <chrono>
 #include <list>
+#include <condition_variable>
+#include <queue>
 
 extern std::unordered_map<std::string, std::string> database;
 
@@ -23,3 +25,9 @@ extern std::unordered_map<
     lruMap;
 
 extern const size_t MAX_CAPACITY;
+
+extern std::queue<std::pair<int, int>> clientQueue;
+
+extern std::mutex queueMutex;
+
+extern std::condition_variable cv;

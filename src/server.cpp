@@ -1,6 +1,7 @@
 #include "server.h"
 #include "client_handler.h"
 #include "logger.h"
+#include "global.h"
 
 #include <thread>
 #include <atomic>
@@ -8,6 +9,7 @@
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <unistd.h>
+#include <mutex>
 
 using namespace std;
 
@@ -67,9 +69,16 @@ void startServer()
 
         int clientID = ++clientCount;
 
-        thread t(handleClient, client_fd, clientID);
+        {
+            lock_guard<mutex>
+                lock(queueMutex);
 
-        t.detach();
+            clientQueue.push(
+                {client_fd,
+                 clientID});
+        }
+
+        cv.notify_one();
     }
 
     close(server_fd);
