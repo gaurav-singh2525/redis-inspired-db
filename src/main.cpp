@@ -3,11 +3,13 @@
 #include "server.h"
 #include "ttl_cleanup.h"
 #include "worker.h"
+#include "config.h"
 
 #include <thread>
 
 int main()
 {
+    loadConfig();
     loadDatabase();
     replayWal();
     saveDatabase();
@@ -21,7 +23,7 @@ int main()
     {
         std::thread(worker).detach();
     }
-    
+
     startServer();
     return 0;
 }

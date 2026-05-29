@@ -1,5 +1,5 @@
 #include "wal.h"
-
+#include "global.h"
 #include <fstream>
 
 using namespace std;
@@ -7,7 +7,7 @@ using namespace std;
 void appendToWal(const string &command)
 {
     ofstream file(
-        "data/wal.log",
+        WAL_PATH,
         ios::app);
 
     if (!file.is_open())
@@ -18,5 +18,5 @@ void appendToWal(const string &command)
 
 void clearWal()
 {
-    ofstream file("data/wal.log", ios::trunc);
+    ofstream file(WAL_PATH, ios::trunc);
 }

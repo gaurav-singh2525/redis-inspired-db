@@ -28,7 +28,7 @@ void startServer()
     sockaddr_in serverAddr{};
 
     serverAddr.sin_family = AF_INET;
-    serverAddr.sin_port = htons(9000);
+    serverAddr.sin_port = htons(PORT);
     serverAddr.sin_addr.s_addr = INADDR_ANY;
 
     // forces server to start

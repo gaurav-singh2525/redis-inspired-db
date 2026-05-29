@@ -15,7 +15,7 @@ void saveDatabase()
 {
     lock_guard<mutex> lock(dbMutex);
 
-    ofstream fout("data/store.cdb");
+    ofstream fout(DB_PATH);
 
     if (!fout.is_open())
     {
@@ -32,14 +32,14 @@ void saveDatabase()
 
 void clearSnapshot()
 {
-    ofstream file("data/store.cdb", ios::trunc);
+    ofstream file(DB_PATH, ios::trunc);
 }
 
 void loadDatabase()
 {
     lock_guard<mutex> lock(dbMutex);
 
-    ifstream fin("data/store.cdb");
+    ifstream fin(DB_PATH);
 
     if (!fin.is_open())
     {
@@ -82,7 +82,7 @@ void replayWal()
     lock_guard<mutex> lock(dbMutex);
 
     ifstream file(
-        "data/wal.log");
+        WAL_PATH);
 
     string line;
 

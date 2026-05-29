@@ -20,11 +20,15 @@ std::unordered_map<
     std::list<std::string>::iterator>
     lruMap;
 
-const size_t MAX_CAPACITY = 1000;
-
 queue<pair<int, int>>
     clientQueue;
 
 mutex queueMutex;
 
 condition_variable cv;
+
+int PORT = 9000;
+int CACHE_CAPACITY = 100;
+const size_t MAX_CAPACITY = CACHE_CAPACITY;
+string WAL_PATH = "data/wal.log";
+string DB_PATH = "data/store.cdb";

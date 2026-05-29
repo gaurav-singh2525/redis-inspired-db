@@ -31,3 +31,9 @@ extern std::queue<std::pair<int, int>> clientQueue;
 extern std::mutex queueMutex;
 
 extern std::condition_variable cv;
+
+extern int PORT;
+extern int CACHE_CAPACITY;
+
+extern std::string WAL_PATH;
+extern std::string DB_PATH;
