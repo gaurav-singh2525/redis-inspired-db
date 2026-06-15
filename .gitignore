@@ -5,3 +5,5 @@ a.out
 db_server
 data/*.cdb
 data/*.log
+data/*.txt
+/benchmarks/bench_runner

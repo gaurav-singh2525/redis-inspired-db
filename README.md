@@ -1,10 +1,10 @@
-# Mini Redis
+# Mini-Redis
 
 > A from-scratch, **Redis-inspired** in-memory key-value database built in **C++17** — designed to teach real database concepts: TCP networking, concurrency, persistence, TTL, LRU eviction, and protocol parsing.
 
 This is **not** the official Redis project. It is a compact, readable server (~900 lines) that implements the core *ideas* behind production in-memory stores.
 
-**Repository:** [github.com/gaurav-singh2525/redis](https://github.com/gaurav-singh2525/redis)
+**Repository:** [github.com/gaurav-singh2525/redis](https://github.com/gaurav-singh2525/redis-inspired-db)
 
 ---
 
@@ -544,6 +544,31 @@ CLEAR
 ```
 
 ---
+
+## What I Learned
+
+- TCP is a byte stream, not a message protocol
+- Mutexes are required to protect shared state
+- WAL enables crash recovery
+- LRU can be implemented in O(1) using list + hashmap
+- Condition variables prevent busy waiting
+
+---
+
+
+## Future Improvements
+
+- poll()/epoll event loop
+- RESP response encoding
+- shared_mutex
+- binary snapshot format
+- graceful shutdown
+- metrics endpoint
+
+---
+## Benchmark
+
+ Go to (benchmarks/REPORT_TEMPLATE.md) for Benchmark results
 
 ## Limitations
 

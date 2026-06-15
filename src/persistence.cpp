@@ -8,11 +8,39 @@
 #include <mutex>
 #include <cctype>
 #include <algorithm>
+#include <chrono>
+#include <cstdlib>
 
 using namespace std;
 
+static void writeBenchTiming(
+    const string &metric,
+    long long ms,
+    size_t keys = 0)
+{
+    if (!getenv("BENCH_TIMING"))
+        return;
+
+    ofstream fout(
+        "data/bench_timing.txt",
+        ios::app);
+
+    if (!fout.is_open())
+        return;
+
+    fout << metric << "=" << ms;
+
+    if (keys > 0)
+        fout << " keys=" << keys;
+
+    fout << "\n";
+}
+
 void saveDatabase()
 {
+    auto start =
+        chrono::high_resolution_clock::now();
+
     lock_guard<mutex> lock(dbMutex);
 
     ofstream fout(DB_PATH);
@@ -27,6 +55,18 @@ void saveDatabase()
     {
         fout << key << "=" << value << "\n";
     }
+
+    auto end =
+        chrono::high_resolution_clock::now();
+
+    writeBenchTiming(
+        "save_ms",
+        chrono::duration_cast<
+            chrono::milliseconds>(
+            end - start)
+            .count(),
+        database.size());
+
     cout << "saved success\n";
 }
 
@@ -37,12 +77,16 @@ void clearSnapshot()
 
 void loadDatabase()
 {
+    auto start =
+        chrono::high_resolution_clock::now();
+
     lock_guard<mutex> lock(dbMutex);
 
     ifstream fin(DB_PATH);
 
     if (!fin.is_open())
     {
+        writeBenchTiming("load_ms", 0, 0);
         return;
     }
 
@@ -74,11 +118,26 @@ void loadDatabase()
         database[key] = value;
         insertKey(key);
     }
+
+    auto end =
+        chrono::high_resolution_clock::now();
+
+    writeBenchTiming(
+        "load_ms",
+        chrono::duration_cast<
+            chrono::milliseconds>(
+            end - start)
+            .count(),
+        database.size());
+
     cout << "Success loading\n";
 }
 
 void replayWal()
 {
+    auto start =
+        chrono::high_resolution_clock::now();
+
     lock_guard<mutex> lock(dbMutex);
 
     ifstream file(
@@ -137,5 +196,16 @@ void replayWal()
             expiryMap[parsedData[1]] = expiryTime;
         }
     }
+
+    auto end =
+        chrono::high_resolution_clock::now();
+
+    writeBenchTiming(
+        "replay_ms",
+        chrono::duration_cast<
+            chrono::milliseconds>(
+            end - start)
+            .count());
+
     cout << "success replay\n";
 }
