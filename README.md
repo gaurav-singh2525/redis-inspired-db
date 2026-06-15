@@ -1,99 +1,314 @@
-# db_server
+# Mini Redis
 
-A from-scratch, **Redis-inspired** in-memory key-value server written in **C++17**. This is a learning project — it is **not** the official Redis codebase. It implements a TCP server with string keys/values, persistence, TTL, LRU eviction, and multi-client concurrency.
+> A from-scratch, **Redis-inspired** in-memory key-value database built in **C++17** — designed to teach real database concepts: TCP networking, concurrency, persistence, TTL, LRU eviction, and protocol parsing.
+
+This is **not** the official Redis project. It is a compact, readable server (~900 lines) that implements the core *ideas* behind production in-memory stores.
 
 **Repository:** [github.com/gaurav-singh2525/redis](https://github.com/gaurav-singh2525/redis)
 
 ---
 
-## Table of contents
+## Highlights
 
-- [Features](#features)
-- [Architecture](#architecture)
-- [Project structure](#project-structure)
-- [Requirements](#requirements)
-- [Build and run](#build-and-run)
-- [Protocol](#protocol)
-- [Commands](#commands)
-- [Examples](#examples)
-- [Persistence](#persistence)
-- [LRU cache eviction](#lru-cache-eviction)
-- [TTL (time-to-live)](#ttl-time-to-live)
-- [Concurrency](#concurrency)
-- [Logging](#logging)
-- [Limitations](#limitations)
+| | |
+|---|---|
+| **In-memory KV store** | `unordered_map` with string keys and values |
+| **Multi-client TCP** | Port configurable via `configs/server.conf` (default **9000**) |
+| **Worker thread pool** | 8 workers + bounded accept queue — not one OS thread per client forever |
+| **Dual protocol** | Plain text lines **or** RESP array input (`*argc` + bulk strings) |
+| **LRU eviction** | O(1) touch/evict with `list` + iterator map; configurable capacity |
+| **TTL** | `EXPIRE` / `TTL` with lazy + active expiry |
+| **Durability** | Snapshot (`store.cdb`) + write-ahead log (`wal.log`) |
+| **Crash recovery** | Load → replay → checkpoint on every startup |
+| **Full reset** | `CLEAR` wipes memory **and** disk |
 
 ---
 
-## Features
+## Table of contents
 
-| Area | What it does |
-|------|----------------|
-| **Networking** | TCP server on port **9000**, `SO_REUSEADDR`, listen backlog of 5 |
-| **Concurrency** | One detached thread per client; shared `dbMutex`; atomic client IDs |
-| **Protocols** | Plain text (newline-delimited) and partial **RESP** input for incoming commands |
-| **Commands** | `PING`, `SET`, `GET`, `DEL`, `COUNT`, `EXPIRE`, `TTL`, `CLEAR`, `LRU`, `CAPACITY` |
-| **LRU eviction** | Least-recently-used eviction when key count exceeds `MAX_CAPACITY` (default **10**) |
-| **TTL** | Per-key expiry with `EXPIRE` / `TTL`; lazy + background cleanup |
-| **Persistence** | Snapshot file (`data/store.cdb`) + write-ahead log (`data/wal.log`) |
-| **Recovery** | On startup: load snapshot → replay WAL → checkpoint → clear WAL |
-| **CLEAR** | Full reset: memory, LRU, WAL, and snapshot |
-| **Logging** | Timestamped logs to stdout for connections and mutating operations |
+1. [Architecture](#architecture)
+2. [Startup & recovery flow](#startup--recovery-flow)
+3. [Runtime request flow](#runtime-request-flow)
+4. [Key subsystems](#key-subsystems)
+5. [Project structure](#project-structure)
+6. [Build & run](#build--run)
+7. [Configuration](#configuration)
+8. [Protocol](#protocol)
+9. [Commands](#commands)
+10. [Examples](#examples)
+11. [Limitations](#limitations)
 
 ---
 
 ## Architecture
 
-### Startup sequence
+```mermaid
+flowchart TB
+    subgraph clients [Clients]
+        C1[TCP client]
+        C2[TCP client]
+    end
 
-On launch, `main` runs recovery before accepting clients:
+    subgraph server [db_server process]
+        MAIN[main thread]
+        ACCEPT[accept loop]
+        Q[(clientQueue)]
+        W1[worker 1]
+        W2[worker 2]
+        WN[worker 8]
+        TTL[TTL cleanup thread]
+        DISPATCH[cmdDispatcher]
+        DB[(database)]
+        EXP[(expiryMap)]
+        LRU[(lruList + lruMap)]
+        MAIN --> ACCEPT
+        ACCEPT -->|enqueue fd| Q
+        Q --> W1 & W2 & WN
+        W1 & W2 & WN --> DISPATCH
+        DISPATCH --> DB & EXP & LRU
+        TTL --> DB & EXP & LRU
+    end
 
-1. **Load** snapshot from `data/store.cdb`
-2. **Replay** WAL from `data/wal.log`
-3. **Checkpoint** — save merged state back to `data/store.cdb`
-4. **Clear** WAL (empty log after clean checkpoint)
-5. **Start** background TTL cleanup thread (1-second interval)
-6. **Listen** on TCP port 9000
+    subgraph disk [Disk]
+        CDB[store.cdb]
+        WAL[wal.log]
+    end
+
+    C1 & C2 --> ACCEPT
+    DISPATCH --> WAL
+    MAIN --> CDB
+    MAIN --> WAL
+```
+
+### Threading model
+
+```mermaid
+sequenceDiagram
+    participant Main as Main thread
+    participant Accept as Accept loop
+    participant Queue as clientQueue
+    participant Worker as Worker thread
+    participant Handler as handleClient
+    participant DB as cmdDispatcher
+
+    Main->>Accept: startServer()
+    Accept->>Queue: push(client_fd, id)
+    Accept->>Worker: notify cv
+    Worker->>Queue: pop client
+    Worker->>Handler: handleClient(fd, id)
+    loop per connection
+        Handler->>Handler: recv → pending buffer
+        Handler->>DB: dispatch command
+        DB-->>Handler: response
+        Handler->>Handler: send response
+    end
+```
+
+| Component | File | Role |
+|-----------|------|------|
+| Entry & boot | `src/main.cpp` | Config, recovery, spawn TTL + workers, start server |
+| Config | `src/config.cpp` | Load `configs/server.conf` |
+| Accept loop | `src/server.cpp` | `bind` / `listen` / `accept`, enqueue clients |
+| Worker pool | `src/worker.cpp` | 8 threads dequeue and run `handleClient` |
+| Client I/O | `src/client_handler.cpp` | `pending` buffer, text + RESP framing |
+| Commands | `src/db.cpp` | `cmdDispatcher` — all command logic |
+| Parser | `src/parser.cpp` | Plain-text tokenization |
+| LRU | `src/lru.cpp` | Touch, insert, evict, `formatLruList` |
+| Persistence | `src/persistence.cpp` | Snapshot load/save, WAL replay |
+| WAL | `src/wal.cpp` | Append-only log |
+| TTL sweeper | `src/ttl_cleanup.cpp` | Background expiry every 1s |
+| Logging | `src/logger.cpp` | Timestamped stdout logs |
+| Global state | `src/global.cpp` | DB, mutexes, queues, paths |
+
+---
+
+## Startup & recovery flow
+
+Every time the server starts, it rebuilds consistent state from disk before listening:
+
+```mermaid
+flowchart LR
+    A[loadConfig] --> B[loadDatabase]
+    B --> C[replayWal]
+    C --> D[saveDatabase]
+    D --> E[clearWal]
+    E --> F[spawn TTL thread]
+    F --> G[spawn 8 workers]
+    G --> H[startServer]
+```
+
+| Step | What happens |
+|------|----------------|
+| **loadConfig** | Read `configs/server.conf` (port, paths, capacity) |
+| **loadDatabase** | Restore `key=value` pairs from snapshot into memory + LRU |
+| **replayWal** | Apply `SET`, `DEL`, `EXPIRE` entries written since last snapshot |
+| **saveDatabase** | Checkpoint merged state back to snapshot |
+| **clearWal** | Truncate WAL — clean slate after successful recovery |
+| **TTL thread** | Detached; sweeps `expiryMap` every second |
+| **Workers** | 8 detached threads wait on `clientQueue` |
+| **startServer** | Blocks in accept loop |
+
+> **Important:** TTL metadata lives in `expiryMap` and WAL, **not** in the snapshot file. After a clean restart, TTL state is only restored from WAL entries replayed before checkpoint.
+
+---
+
+## Runtime request flow
+```mermaid
+flowchart TD
+    RECV[recv bytes] --> APPEND[append to pending]
+    APPEND --> CHECK{RESP format?}
+
+    CHECK -->|yes| RESP[Parse RESP array]
+    CHECK -->|no| TEXT[Find newline]
+
+    RESP --> COMPLETE{Full message?}
+    TEXT --> COMPLETE2{Full line?}
+
+    COMPLETE -->|no| WAIT[wait for more bytes]
+    COMPLETE2 -->|no| WAIT
+
+    COMPLETE -->|yes| BUILD[Build command string]
+    COMPLETE2 -->|yes| BUILD
+
+    BUILD --> DISPATCH[cmdDispatcher]
+    DISPATCH --> LOCK[lock dbMutex]
+    LOCK --> OP[DB / LRU / TTL / WAL]
+    OP --> RESPOND[send response + newline]
+    RESPOND --> ERASE[erase consumed bytes from pending]
+    ERASE --> MORE{more in pending?}
+
+    MORE -->|yes| CHECK
+```
+
+### `pending` buffer (TCP-safe reads)
+
+TCP is a **byte stream** — one `recv()` does not equal one command. `handleClient` accumulates all bytes in `pending` and only dispatches when a **complete** message is available:
+
+- **Text mode:** waits for `\n`
+- **RESP mode:** waits for `*argc`, each `$len` line, and exactly `len` bytes + `\r\n` per argument
+
+Incomplete packets stay in `pending` — they are **not** treated as invalid.
+
+---
+
+## Key subsystems
+
+### 1. In-memory database
+
+```cpp
+unordered_map<string, string> database;   // key → value
+mutex dbMutex;                            // protects all shared state
+```
+
+All reads and writes go through `cmdDispatcher` under `dbMutex`.
+
+---
+
+### 2. LRU cache eviction
+
+```mermaid
+flowchart LR
+    subgraph structures [LRU structures]
+        LIST["lruList (doubly-linked list)"]
+        MAP["lruMap (key → iterator)"]
+    end
+
+    SET[SET / new key] -->|push_front| LIST
+    GET[GET] -->|move to front| LIST
+    DEL[DEL / expiry / eviction] -->|erase| LIST
+
+    FULL{size > MAX_CAPACITY?} -->|yes| EVICT[pop_back LRU key]
+    EVICT --> WAL_DEL[append DEL to WAL]
+```
+
+| Operation | LRU effect |
+|-----------|------------|
+| `SET` (new key) | Insert at front; may trigger eviction |
+| `SET` (existing) | Touch → move to front |
+| `GET` | Touch → move to front |
+| `DEL` / expiry / eviction | Remove from list |
+| `LRU` | Print order MRU → LRU |
+| `CAPACITY` | Return max key count |
+
+**Eviction policy:** When `database.size() > MAX_CAPACITY`, remove the **back** of `lruList` (least recently used). Evicted keys get a `DEL` entry in the WAL.
+
+**Data structures:** `std::list<std::string>` + `std::unordered_map<std::string, list::iterator>` for O(1) touch and evict.
+
+---
+
+### 3. TTL (time-to-live)
+
+```mermaid
+flowchart TD
+    EXPIRE["EXPIRE key seconds"] --> MAP["expiryMap[key] = now + seconds"]
+    MAP --> WAL["WAL: EXPIRE key unix_timestamp"]
+
+    subgraph expiry_paths [Expiry paths]
+        LAZY["Lazy: GET, TTL, isExpired()"]
+        ACTIVE["Active: background thread every 1s"]
+        COUNT["COUNT: sweep before returning size"]
+    end
+
+    MAP --> expiry_paths
+    expiry_paths --> REMOVE["erase from database + expiryMap + LRU"]
+```
+
+| Detail | Behavior |
+|--------|----------|
+| `EXPIRE` at runtime | Relative seconds → stored as absolute `time_point` |
+| WAL `EXPIRE` entry | Absolute Unix timestamp (replay-safe) |
+| `SET` on a key | Clears existing TTL |
+| `TTL` responses | Seconds left, `NO TTL`, or `TTL EXPIRED OR KEY DNE` |
+
+---
+
+### 4. Persistence (snapshot + WAL)
 
 ```mermaid
 flowchart TB
-    main[main] --> load[loadDatabase]
-    load --> replay[replayWal]
-    replay --> save[saveDatabase]
-    save --> clearWal[clearWal]
-    clearWal --> ttlThread[TTL cleanup thread]
-    ttlThread --> server[startServer]
-    server --> accept[accept loop]
-    accept --> client[handleClient thread]
-    client --> dispatch[cmdDispatcher]
-    dispatch --> db[(database + expiryMap + LRU)]
-    dispatch --> wal[WAL file]
+    subgraph runtime [Runtime writes]
+        SET --> WAL_APPEND[appendToWal]
+        DEL --> WAL_APPEND
+        EXPIRE --> WAL_APPEND
+        EVICT[LRU eviction] --> WAL_APPEND
+    end
+
+    subgraph files [Disk files]
+        SNAP["store.cdb  key=value per line"]
+        WALF["wal.log  one command per line"]
+    end
+
+    WAL_APPEND --> WALF
+    CHECKPOINT[Startup checkpoint] --> SNAP
+    CHECKPOINT -->|truncate| WALF
 ```
 
-### Runtime model
+| File | Format | Contents |
+|------|--------|----------|
+| `data/store.cdb` | `key=value\n` | Snapshot of all key-value pairs |
+| `data/wal.log` | One command per line | `SET`, `DEL`, `EXPIRE` (absolute time) |
 
-- The **main thread** runs the accept loop (`src/server.cpp`).
-- Each connection gets a **detached worker thread** (`src/client_handler.cpp`) that reads input, dispatches commands, and sends replies.
-- A **background TTL thread** (`src/ttl_cleanup.cpp`) periodically removes expired keys.
-- All shared state (`database`, `expiryMap`, LRU structures) is protected by **`dbMutex`**.
+**`CLEAR`** truncates both files and wipes all in-memory structures.
 
-### Module overview
+---
 
-| File | Role |
-|------|------|
-| `src/main.cpp` | Startup: persistence recovery, TTL thread, server |
-| `src/server.cpp` | Socket create, bind, listen, accept |
-| `src/client_handler.cpp` | Per-client I/O; text and RESP framing |
-| `src/db.cpp` | Command dispatcher |
-| `src/parser.cpp` | Plain-text command parsing |
-| `src/resp.cpp` | RESP array parsing |
-| `src/lru.cpp` | LRU list: touch, insert, remove, evict |
-| `src/persistence.cpp` | Load/save snapshot, WAL replay |
-| `src/wal.cpp` | Append/truncate WAL |
-| `src/ttl_cleanup.cpp` | Background expiry sweeper |
-| `src/logger.cpp` | Timestamped logging |
-| `src/global.cpp` | Global DB, mutex, LRU, `MAX_CAPACITY` |
-| `include/` | Headers |
+### 5. Concurrency
+
+```mermaid
+flowchart LR
+    ACCEPT[Accept thread] -->|push| Q[clientQueue + queueMutex]
+    Q -->|pop| W1[Worker 1]
+    Q -->|pop| W2[Worker 2]
+    Q -->|pop| W8[Worker 8]
+    W1 & W2 & W8 --> M[dbMutex]
+    M --> DB[(database + LRU + TTL)]
+    TTL_THREAD[TTL thread] --> M
+```
+
+- **8 worker threads** handle client connections sequentially per client (one `handleClient` per fd).
+- **`dbMutex`** serializes all database, LRU, and TTL map access.
+- **`queueMutex` + `condition_variable`** coordinate the accept → worker handoff.
+- **Logging** uses a separate `coutMutex` to avoid garbled output.
 
 ---
 
@@ -101,54 +316,98 @@ flowchart TB
 
 ```
 redis/
-├── include/          # Headers (db, server, lru, persistence, wal, resp, …)
-├── src/              # Implementation (.cpp)
-├── data/             # Runtime data (gitignored)
-│   ├── store.cdb     # Snapshot (key=value lines)
-│   └── wal.log       # Write-ahead log
+├── configs/
+│   └── server.conf       # port, cache_capacity, wal_path, db_path
+├── include/              # Headers
+│   ├── client_handler.h
+│   ├── config.h
+│   ├── db.h
+│   ├── global.h
+│   ├── logger.h
+│   ├── lru.h
+│   ├── parser.h
+│   ├── persistence.h
+│   ├── server.h
+│   ├── ttl_cleanup.h
+│   ├── wal.h
+│   └── worker.h
+├── src/                  # Implementation
+│   ├── client_handler.cpp
+│   ├── config.cpp
+│   ├── db.cpp
+│   ├── global.cpp
+│   ├── logger.cpp
+│   ├── lru.cpp
+│   ├── main.cpp
+│   ├── parser.cpp
+│   ├── persistence.cpp
+│   ├── server.cpp
+│   ├── ttl_cleanup.cpp
+│   ├── wal.cpp
+│   └── worker.cpp
+├── data/                 # Runtime (gitignored)
+│   ├── store.cdb
+│   └── wal.log
 ├── Makefile
 └── README.md
 ```
 
-Persistence files under `data/` are listed in `.gitignore` and are created at runtime.
-
 ---
 
-## Requirements
+## Build & run
 
-- **g++** with **C++17** support
-- **Linux** (or POSIX environment with Berkeley sockets)
-- **pthread** (linked via `-pthread` in the Makefile)
+### Requirements
 
----
+- **g++** with C++17
+- **Linux / POSIX** (Berkeley sockets, pthread)
 
-## Build and run
+### Commands
 
 ```bash
-mkdir -p data    # first time only
-make             # builds ./db_server
-./db_server      # start server
-
-# or
-make run         # build + run
-make clean       # remove binary
+mkdir -p data
+make              # build ./db_server
+./db_server       # start server
+make run          # build + run
+make clean        # remove binary
 ```
 
-Connect with any TCP client:
+### Connect
 
 ```bash
 nc localhost 9000
 ```
 
-Send one command per line. The server appends `\n` to each response.
+Send one command per line. Responses are plain text followed by `\n`.
+
+---
+
+## Configuration
+
+Edit [`configs/server.conf`](configs/server.conf):
+
+```ini
+port=9000
+cache_capacity=100
+wal_path=data/wal.log
+db_path=data/store.cdb
+```
+
+| Key | Default | Effect |
+|-----|---------|--------|
+| `port` | `9000` | TCP listen port |
+| `cache_capacity` | `100` | Target LRU max keys (see note below) |
+| `wal_path` | `data/wal.log` | Write-ahead log path |
+| `db_path` | `data/store.cdb` | Snapshot file path |
+
+Loaded at startup via `loadConfig()` in `src/config.cpp`. Missing file → defaults + log message.
+
+> **Note on `cache_capacity`:** `MAX_CAPACITY` (used by LRU eviction and the `CAPACITY` command) is initialized from `CACHE_CAPACITY` at program start. Changing `cache_capacity` in the config updates `CACHE_CAPACITY` but may not change `MAX_CAPACITY` until `MAX_CAPACITY` is wired to reload after config load. Verify with the `CAPACITY` command after changing config.
 
 ---
 
 ## Protocol
 
-### Plain text (default)
-
-Commands are a single line, space-separated. Values for `SET` may contain spaces (everything after the second token is the value).
+### Plain text
 
 ```
 SET mykey hello world
@@ -156,180 +415,113 @@ GET mykey
 PING
 ```
 
+- Command names are case-insensitive.
+- `SET` values can contain spaces (everything after the key is the value).
+
 ### RESP (input only)
 
-Incoming requests may use the Redis **array of bulk strings** format. The client handler assembles full RESP messages before dispatching.
-
-Example equivalent to `SET foo bar`:
+Supports Redis-style **array of bulk strings** for incoming commands:
 
 ```
 *3
 $3
 SET
+$4
+name
 $3
-foo
-$3
-bar
+bob
 ```
 
-(Use `\r\n` line endings when sending from tools that expect RESP.)
+**Responses are plain text**, not RESP-encoded.
 
-**Note:** Responses are **plain text + newline**, not RESP-encoded. This server is not fully compatible with `redis-cli` unless you account for that.
+#### Shell quoting (critical)
+
+In bash, `$3`, `$4`, etc. inside **double quotes** are treated as shell variables. Always use **single quotes** for RESP test commands:
+
+```bash
+# correct
+printf '*1\r\n$4\r\nPING\r\n' | nc -w 2 localhost 9000
+
+# wrong — $4 is eaten by bash
+printf "*1\r\n$4\r\nPING\r\n" | nc localhost 9000
+```
+
+#### Split-packet test (partial TCP)
+
+```bash
+(
+  printf '*3\r\n$3\r\nSE'
+  sleep 2
+  printf 'T\r\n$4\r\nname\r\n$3\r\nbob\r\n'
+) | nc -w 8 localhost 9000
+# → OK
+```
 
 ---
 
 ## Commands
 
-All command names are **case-insensitive**. Wrong arity returns `INVALID COMMAND`.
-
-| Command | Syntax | Success / typical response | WAL | LRU / TTL |
-|---------|--------|----------------------------|-----|-----------|
-| `PING` | `PING` | `PONG` | No | — |
-| `SET` | `SET key value` | `OK` | Yes (`SET key value`) | Inserts/updates LRU; clears TTL on key; may evict |
-| `GET` | `GET key` | value or `NULL` | No | Touches LRU (MRU); lazy expiry |
-| `DEL` | `DEL key` | `OK` or `DNE` | Yes (`DEL key`) | Removes key from LRU and TTL |
-| `EXPIRE` | `EXPIRE key seconds` | `OK` or `KEY DNE` | Yes (absolute unix timestamp) | No LRU change |
-| `TTL` | `TTL key` | seconds remaining, `NO TTL`, or `TTL EXPIRED OR KEY DNE` | No | Lazy expiry check |
-| `COUNT` | `COUNT` | Integer (key count) | No | Sweeps expired keys first |
-| `LRU` | `LRU` | Keys MRU → LRU, one per line, or `EMPTY` | No | Read-only |
-| `CAPACITY` | `CAPACITY` | Max key count (e.g. `10`) | No | Read-only |
-| `CLEAR` | `CLEAR` | `OK` | Clears WAL file | Clears DB, TTL, LRU, snapshot |
-
-### Command details
-
-#### `PING`
-
-Health check. No arguments.
-
-```
-PING
-→ PONG
-```
-
-#### `SET`
-
-Store a string value. Overwriting a key clears its TTL. If the database is at capacity, the **least recently used** key is evicted (and a `DEL` is written to the WAL).
-
-```
-SET user:1 Alice
-→ OK
-```
-
-#### `GET`
-
-Return the value, or `NULL` if missing or expired. A successful read marks the key as **most recently used**.
-
-```
-GET user:1
-→ Alice
-```
-
-#### `DEL`
-
-Delete a key. Returns `DNE` if the key does not exist.
-
-```
-DEL user:1
-→ OK
-```
-
-#### `EXPIRE`
-
-Set a TTL in **seconds** from now. Key must exist.
-
-```
-EXPIRE session:abc 300
-→ OK
-```
-
-The WAL stores an **absolute** Unix timestamp for correct replay after restarts.
-
-#### `TTL`
-
-Return remaining seconds, or:
-
-- `NO TTL` — key exists but has no expiry
-- `TTL EXPIRED OR KEY DNE` — missing or already expired
-
-```
-TTL session:abc
-→ 287
-```
-
-#### `COUNT`
-
-Return the number of keys in the database. Expired keys (by TTL) are removed before counting.
-
-```
-COUNT
-→ 5
-```
-
-#### `LRU`
-
-Print the current LRU order from **most recently used** (top) to **least recently used** (bottom), one key per line. Returns `EMPTY` if there are no keys in the LRU list.
-
-```
-LRU
-→ key_a
-  key_b
-  key_c
-```
-
-#### `CAPACITY`
-
-Return the configured maximum number of keys (`MAX_CAPACITY` in `src/global.cpp`, currently **10**).
-
-```
-CAPACITY
-→ 10
-```
-
-#### `CLEAR`
-
-Full database reset:
-
-- Clears in-memory `database`, `expiryMap`, and LRU structures
-- Truncates `data/wal.log` and `data/store.cdb`
-
-```
-CLEAR
-→ OK
-```
+| Command | Syntax | Response(s) | WAL | Side effects |
+|---------|--------|-------------|-----|--------------|
+| `PING` | `PING` | `PONG` | — | — |
+| `SET` | `SET key value` | `OK` / `INVALID COMMAND` | `SET key value` | LRU insert/touch; clears TTL; may evict |
+| `GET` | `GET key` | value / `NULL` | — | LRU touch; lazy expiry |
+| `DEL` | `DEL key` | `OK` / `DNE` | `DEL key` | Removes LRU + TTL |
+| `EXPIRE` | `EXPIRE key seconds` | `OK` / `KEY DNE` | `EXPIRE key timestamp` | Sets TTL |
+| `TTL` | `TTL key` | seconds / `NO TTL` / `TTL EXPIRED OR KEY DNE` | — | Lazy expiry |
+| `COUNT` | `COUNT` | integer | — | Sweeps expired keys first |
+| `LRU` | `LRU` | keys MRU→LRU (one per line) or `EMPTY` | — | Read-only |
+| `CAPACITY` | `CAPACITY` | max key count | — | Read-only |
+| `CLEAR` | `CLEAR` | `OK` | Truncates WAL | Full memory + disk reset |
 
 ---
 
 ## Examples
 
-### LRU eviction
+### Basic usage
 
-With `MAX_CAPACITY = 10`, adding an 11th distinct key evicts the LRU key:
+```
+PING
+→ PONG
+
+SET user:1 Alice
+→ OK
+
+GET user:1
+→ Alice
+
+DEL user:1
+→ OK
+
+COUNT
+→ 0
+```
+
+### LRU eviction
 
 ```
 CAPACITY
-→ 10
+→ 100
 
 SET k1 v1
 SET k2 v2
 …
-SET k10 v10
-SET k11 v11    # evicts least recently used key
+# after exceeding capacity, LRU key is evicted automatically
 
-LRU            # k11 is MRU; evicted key no longer listed
+GET k1          # moves k1 to MRU
+LRU             # shows current order, MRU first
 ```
-
-`GET` on a key moves it to the MRU position.
 
 ### TTL
 
 ```
-SET temp data
-EXPIRE temp 5
-TTL temp
-→ 4
+SET session abc
+EXPIRE session 30
+TTL session
+→ 28
 
-# after 5+ seconds, or after background sweep:
-GET temp
+# after expiry:
+GET session
 → NULL
 ```
 
@@ -337,114 +529,50 @@ GET temp
 
 ```
 SET persistent hello
-# stop server (Ctrl+C), then restart ./db_server
+# Ctrl+C server, then:
+./db_server
 GET persistent
 → hello
 ```
 
-After a clean shutdown, startup reloads from `store.cdb` and any WAL not yet checkpointed.
-
----
-
-## Persistence
-
-### Snapshot — `data/store.cdb`
-
-- Format: one entry per line, `key=value`
-- Saved on startup after WAL replay (checkpoint)
-- Load skips malformed lines (no `=`, multiple `=`, empty key/value)
-- **TTL is not stored** in the snapshot — only key/value pairs
-
-### Write-ahead log — `data/wal.log`
-
-Append-only log for durability between checkpoints:
-
-| Operation | WAL entry |
-|-----------|-----------|
-| `SET` | `SET key value` |
-| `DEL` | `DEL key` |
-| `EXPIRE` | `EXPIRE key <unix_timestamp>` |
-| LRU eviction | `DEL <evicted_key>` |
-| `CLEAR` | WAL file truncated (no entry kept) |
-
-### Recovery flow
+### Full reset
 
 ```
-load store.cdb  →  replay wal.log  →  save store.cdb  →  clear wal.log
+CLEAR
+→ OK
+# database, LRU, WAL, and snapshot are all empty
 ```
-
-If the process crashes mid-run, uncheckpointed WAL entries are replayed on the next start.
-
-**Caveat:** WAL writes are not `fsync`'d; a crash may lose the last buffered writes.
-
----
-
-## LRU cache eviction
-
-- **Structure:** `std::list` (order) + `std::unordered_map` of iterators (O(1) lookup)
-- **Capacity:** `MAX_CAPACITY` in `src/global.cpp` (currently **10**)
-- **Order:** Front = MRU, back = LRU
-- **Updates:** `SET` inserts/touches; `GET` touches; `DEL` / expiry / eviction removes
-- **Eviction:** When `database.size() > MAX_CAPACITY`, the LRU key is removed and `DEL` is appended to the WAL
-
-To change capacity, edit `MAX_CAPACITY` in `src/global.cpp` and rebuild.
-
----
-
-## TTL (time-to-live)
-
-- **`EXPIRE key seconds`** — relative TTL at runtime; stored as absolute time in `expiryMap` and WAL
-- **`TTL key`** — seconds remaining
-- **`SET` on a key** — clears any existing TTL for that key
-- **Expiry paths:**
-  - **Lazy:** `GET`, `TTL`, `isExpired()` during command handling
-  - **Active:** background thread every 1 second (`cleanupExpiredKeys`)
-  - **`COUNT`:** sweeps expired keys before returning size
-
-Expired keys are removed from `database`, `expiryMap`, and the LRU list.
-
----
-
-## Concurrency
-
-- **Model:** Thread-per-client (detached threads on each `accept`)
-- **Synchronization:** Single `dbMutex` guards `database`, `expiryMap`, and LRU structures
-- **Logging:** Separate mutex for stdout to avoid garbled log lines
-- **Tradeoff:** Simple and correct for learning; high connection counts create many threads and mutex contention
-
----
-
-## Logging
-
-Logs go to **stdout** with timestamps:
-
-```
-[2026-05-21 12:00:00] Server listening on port 9000...
-[2026-05-21 12:00:05] New Client Connected
-[2026-05-21 12:00:10] Client:1 set key: foo as bar
-```
-
-Logged events include server start, client connect/disconnect, `SET`, `DEL`, and `EXPIRE`.
 
 ---
 
 ## Limitations
 
-This is an educational server, not production Redis:
+This is an **educational** server, not production Redis:
 
-- **Responses are not RESP** — only incoming RESP is parsed
-- **Not compatible with stock `redis-cli`** without expecting plain-text replies
-- **No `fsync`** — durability is best-effort
-- **TTL not in snapshot** — after checkpoint + WAL clear, TTL state depends on WAL replay until next checkpoint
-- **Port 9000 is hardcoded**
-- **String-only** key-value store (no lists, hashes, pub/sub, etc.)
-- **Keys/values containing `=`** may break snapshot load
-- **Invalid numeric input** to `EXPIRE` / `TTL` / RESP parsing can throw (`stoi` / `stoll`)
-- **No connection limit** — unbounded threads under heavy load
-- **Receive buffer** is 1024 bytes per read; very large lines may need multiple reads (pending buffer handles fragmentation)
+| Area | Limitation |
+|------|------------|
+| Protocol | RESP input only; **responses are plain text** |
+| `redis-cli` | Not fully compatible without expecting text replies |
+| Durability | No `fsync`; crash may lose last WAL writes |
+| TTL in snapshot | Not stored in `store.cdb`; depends on WAL replay |
+| Data model | String keys/values only — no lists, hashes, pub/sub |
+| Snapshot format | Keys/values with `=` can break load |
+| Errors | Invalid numbers in `EXPIRE`/`TTL` can throw (`stoi`) |
+| Workers | Fixed pool of 8; no dynamic scaling |
+| Accept backlog | `listen(5)` — small kernel queue |
 
 ---
 
-## License
+## Comparison with Redis
 
-No license file is included in this repository. Add one if you intend to distribute the project.
+| Feature | db_server | Redis |
+|---------|-----------|-------|
+| Protocol | Text + partial RESP in | Full RESP in/out |
+| Memory | `unordered_map` | Dict + rich types |
+| Eviction | LRU only | Multiple policies |
+| Persistence | Simple CDB + log | RDB + AOF |
+| Networking | Thread pool + blocking I/O | Event loop (epoll) |
+| Replication | None | Master/replica |
+
+---
+

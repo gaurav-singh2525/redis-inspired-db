@@ -14,6 +14,9 @@ void loadConfig()
     if (!fin.is_open())
     {
         logMessage("Config file not found. Using defaults");
+        MAX_CAPACITY =
+            static_cast<size_t>(
+                CACHE_CAPACITY);
         return;
     }
 
@@ -69,4 +72,7 @@ void loadConfig()
     }
 
     logMessage("Config loaded");
+    MAX_CAPACITY =
+        static_cast<size_t>(
+            CACHE_CAPACITY);
 }

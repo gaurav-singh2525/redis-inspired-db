@@ -29,6 +29,6 @@ condition_variable cv;
 
 int PORT = 9000;
 int CACHE_CAPACITY = 100;
-const size_t MAX_CAPACITY = CACHE_CAPACITY;
+size_t MAX_CAPACITY = 100;
 string WAL_PATH = "data/wal.log";
 string DB_PATH = "data/store.cdb";

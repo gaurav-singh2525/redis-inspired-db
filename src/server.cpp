@@ -10,6 +10,7 @@
 #include <netinet/in.h>
 #include <unistd.h>
 #include <mutex>
+#include <string>
 
 using namespace std;
 
@@ -54,7 +55,9 @@ void startServer()
         return;
     }
 
-    logMessage("Server listening on port 9000...");
+    logMessage(
+        "Server listening on port " +
+        to_string(PORT) + "...");
 
     while (true)
     {

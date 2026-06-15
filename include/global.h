@@ -24,7 +24,7 @@ extern std::unordered_map<
     std::list<std::string>::iterator>
     lruMap;
 
-extern const size_t MAX_CAPACITY;
+extern size_t MAX_CAPACITY;
 
 extern std::queue<std::pair<int, int>> clientQueue;
 
