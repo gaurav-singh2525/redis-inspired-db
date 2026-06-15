@@ -35,8 +35,9 @@ This is **not** the official Redis project. It is a compact, readable server (~9
 7. [Configuration](#configuration)
 8. [Protocol](#protocol)
 9. [Commands](#commands)
-10. [Examples](#examples)
-11. [Limitations](#limitations)
+10. [Benchmarks](#benchmarks)
+11. [Examples](#examples)
+12. [Limitations](#limitations)
 
 ---
 
